@@ -1,0 +1,348 @@
+1. Frontend Architecture Overview
+React 18 + TypeScript + Vite + TailwindCSS + Radix UI
+API Layer: All backend features (STT, TTS, translation, voice management, user management) are accessed via REST endpoints.
+State Management: Use React Context or Zustand for user/session/global settings.
+Authentication: Use JWT or session cookies for user login.
+Voice Features: Record, playback, select voices, manage voice library, clone/create voices.
+Groq API: Separate pipeline for language coaching/chat, not part of the main translation pipeline.
+User Profile: Avatar, email, language/voice defaults, etc.
+2. API Endpoints (Frontend Calls)
+You’ll want to call these backend endpoints:
+
+Feature	Endpoint (example)	Method	Notes
+Process Audio (STT+TTS+Translate)	/api/BRIDGIT_AI_/process-audio	POST	Main pipeline
+List Voices	/api/BRIDGIT_AI_/voices	GET	List available voices
+Create Voice	/api/BRIDGIT_AI_/create-voice	POST	Create a new voice
+Clone Voice	/api/BRIDGIT_AI_/clone-voice	POST	Clone a voice
+List Languages	/api/BRIDGIT_AI_/languages	GET	List supported languages
+User Login/Register	/api/BRIDGIT_AI_/auth/login	POST	Auth endpoints
+User Profile	/api/BRIDGIT_AI_/user/profile	GET/PUT	Get/update user info
+Groq API (Kimi K2)	/api/groq/coach (or direct to Groq)	POST	Separate pipeline for coaching/chat
+3. Frontend Components/Pages
+Login/Register: Auth form, sets user context.
+Dashboard: Main app, shows user info, language/voice settings, avatar.
+Voice Recorder: Record audio, send to /process-audio, playback result.
+Voice Library: List/select voices, create/clone voices.
+Language Selector: Choose source/target language.
+Settings: Voice settings, language defaults, avatar upload.
+Coach/Chat: Kimi K2 (Groq) chat interface, real-time feedback.
+4. React Example: Main Audio Pipeline
+import React, { useState } from "react";
+
+export function AudioPipeline() {
+  const [audioUrl, setAudioUrl] = useState("");
+  const [transcript, setTranscript] = useState("");
+  const [translatedText, setTranslatedText] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  // Assume you have user settings/context for language, voice, etc.
+  const userSettings = {
+    targetLang: "ES",
+    voiceId: "JBFqnCBsd6RMkjVDRZzb",
+    modelId: "eleven_flash_v2_5",
+    ttsLanguageCode: "en",
+    voiceSettings: {
+      stability: 0,
+      use_speaker_boost: false,
+      style: 0,
+      similarity_boost: 0,
+      speed: 1
+    }
+  };
+
+  async function handleAudioUpload(audioBlob) {
+    setLoading(true);
+    const formData = new FormData();
+    formData.append("audio", audioBlob, "audio.wav");
+    Object.entries(userSettings).forEach(([key, value]) => {
+      formData.append(key, typeof value === "object" ? JSON.stringify(value) : value);
+    });
+
+    const res = await fetch("/api/BRIDGIT_AI_/process-audio", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+    setAudioUrl(data.audioUrl);
+    setTranscript(data.transcript);
+    setTranslatedText(data.translatedText);
+    setLoading(false);
+  }
+
+  // ...implement audio recording and call handleAudioUpload(blob)
+
+  return (
+    <div>
+      <h2>Bridgit AI Audio Pipeline</h2>
+      {/* Audio recording UI here */}
+      {loading && <div>Processing...</div>}
+      {audioUrl && <audio src={audioUrl} controls autoPlay />}
+      <div>
+        <div>Transcript: {transcript}</div>
+        <div>Translation: {translatedText}</div>
+      </div>
+    </div>
+  );
+}
+
+5. Groq (Kimi K2) Coach Pipeline
+This is a separate React component/page.
+User can type or speak, and you send the text/audio to Groq API for coaching/chat.
+You can use the same audio recording component, but POST to your /api/groq/coach endpoint or directly to Groq.
+6. User Management
+Use a context/provider for user state (login, email, avatar, language/voice defaults).
+On login/register, fetch and store user profile.
+Allow user to update avatar, language, voice, etc.
+7. Voice Management
+Fetch available voices from /api/BRIDGIT_AI_/voices.
+Allow user to create/clone voices (POST to backend).
+Store selected voice in user profile/context.
+8. Language Management
+Fetch supported languages from /api/BRIDGIT_AI_/languages.
+Store user’s default source/target language in profile/context.
+9. Playback
+Use the returned audioUrl in an <audio> tag for playback.
+Optionally, show word-level timings (from sttWords) for highlighting transcript.
+10. Authentication
+Use JWT or session cookies.
+On login/register, store token in localStorage or cookie.
+Attach token to API requests as needed.
+11. Project Structure Example
+/src
+  /components
+    AudioPipeline.tsx
+    VoiceLibrary.tsx
+    LanguageSelector.tsx
+    CoachChat.tsx
+    UserProfile.tsx
+    Login.tsx
+    Settings.tsx
+  /contexts
+    UserContext.tsx
+  App.tsx
+  main.tsx
+
+12. Summary
+Main pipeline: /api/BRIDGIT_AI_/process-audio for STT, translation, TTS, playback.
+Voice, language, user management: Separate endpoints, managed in user profile/context.
+Groq (Kimi K2) coach: Separate pipeline/component.
+Authentication: Standard React auth flow.
+Playback: Use <audio src={audioUrl} />.
+If you want, I can provide:
+
+A full React component for audio recording/upload/playback
+Example user context/auth flow
+Example Groq chat component
+Let me know which part you want to start with!
+
+User
+A full React component for audio recording/upload/playback Example Groq chat component We haven't added the clone. Voice. In our original parameter. Is that an issue?
+
+Assistant
+Great questions! Here’s a detailed answer for each part:
+
+1. Full React Component: Audio Recording, Upload, and Playback
+This component lets the user record audio, upload it to your backend (/api/BRIDGIT_AI_/process-audio), and play back the result. It also displays the transcript and translation.
+
+// AudioPipeline.tsx
+import React, { useRef, useState } from "react";
+
+export default function AudioPipeline() {
+  const [recording, setRecording] = useState(false);
+  const [audioUrl, setAudioUrl] = useState("");
+  const [transcript, setTranscript] = useState("");
+  const [translatedText, setTranslatedText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const audioChunks = useRef<Blob[]>([]);
+
+  // User settings (replace with context or props as needed)
+  const userSettings = {
+    targetLang: "ES",
+    voiceId: "JBFqnCBsd6RMkjVDRZzb",
+    modelId: "eleven_flash_v2_5",
+    ttsLanguageCode: "en",
+    voiceSettings: {
+      stability: 0,
+      use_speaker_boost: false,
+      style: 0,
+      similarity_boost: 0,
+      speed: 1
+    }
+  };
+
+  const startRecording = async () => {
+    setAudioUrl("");
+    setTranscript("");
+    setTranslatedText("");
+    setRecording(true);
+    audioChunks.current = [];
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const recorder = new MediaRecorder(stream);
+    setMediaRecorder(recorder);
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.current.push(e.data);
+    };
+    recorder.onstop = () => {
+      const audioBlob = new Blob(audioChunks.current, { type: "audio/wav" });
+      uploadAudio(audioBlob);
+      stream.getTracks().forEach(track => track.stop());
+    };
+    recorder.start();
+  };
+
+  const stopRecording = () => {
+    setRecording(false);
+    mediaRecorder?.stop();
+  };
+
+  const uploadAudio = async (audioBlob: Blob) => {
+    setLoading(true);
+    const formData = new FormData();
+    formData.append("audio", audioBlob, "audio.wav");
+    Object.entries(userSettings).forEach(([key, value]) => {
+      formData.append(key, typeof value === "object" ? JSON.stringify(value) : value);
+    });
+
+    const res = await fetch("/api/BRIDGIT_AI_/process-audio", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+    setAudioUrl(data.audioUrl);
+    setTranscript(data.transcript);
+    setTranslatedText(data.translatedText);
+    setLoading(false);
+  };
+
+  return (
+    <div className="p-4 max-w-lg mx-auto">
+      <h2 className="text-xl font-bold mb-2">Bridgit AI Audio Pipeline</h2>
+      <div className="mb-4">
+        {!recording ? (
+          <button
+            className="bg-blue-500 text-white px-4 py-2 rounded"
+            onClick={startRecording}
+          >
+            Start Recording
+          </button>
+        ) : (
+          <button
+            className="bg-red-500 text-white px-4 py-2 rounded"
+            onClick={stopRecording}
+          >
+            Stop Recording
+          </button>
+        )}
+      </div>
+      {loading && <div className="mb-2">Processing...</div>}
+      {audioUrl && (
+        <div className="mb-2">
+          <audio src={audioUrl} controls autoPlay />
+        </div>
+      )}
+      {transcript && (
+        <div className="mb-1">
+          <strong>Transcript:</strong> {transcript}
+        </div>
+      )}
+      {translatedText && (
+        <div>
+          <strong>Translation:</strong> {translatedText}
+        </div>
+      )}
+    </div>
+  );
+}
+
+2. Example Groq Chat (Kimi K2) Component
+This is a simple chat interface that sends user input to your Groq API endpoint (or directly to Groq if you prefer).
+You can expand this for real-time or streaming responses.
+
+// GroqChat.tsx
+import React, { useState } from "react";
+
+export default function GroqChat() {
+  const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const sendMessage = async () => {
+    if (!input.trim()) return;
+    setMessages([...messages, { role: "user", text: input }]);
+    setLoading(true);
+
+    // Replace with your Groq API endpoint
+    const res = await fetch("/api/groq/coach", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: input }),
+    });
+    const data = await res.json();
+    setMessages((msgs) => [...msgs, { role: "assistant", text: data.reply }]);
+    setInput("");
+    setLoading(false);
+  };
+
+  return (
+    <div className="p-4 max-w-lg mx-auto">
+      <h2 className="text-xl font-bold mb-2">Kimi K2 Language Coach</h2>
+      <div className="border rounded p-2 h-64 overflow-y-auto mb-2 bg-gray-50">
+        {messages.map((msg, i) => (
+          <div key={i} className={msg.role === "user" ? "text-right" : "text-left"}>
+            <span className={msg.role === "user" ? "text-blue-600" : "text-green-600"}>
+              <strong>{msg.role === "user" ? "You" : "Kimi"}:</strong> {msg.text}
+            </span>
+          </div>
+        ))}
+        {loading && <div className="text-gray-400">Kimi is typing...</div>}
+      </div>
+      <div className="flex">
+        <input
+          className="flex-1 border rounded px-2 py-1 mr-2"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && sendMessage()}
+          placeholder="Type your message..."
+        />
+        <button
+          className="bg-blue-500 text-white px-4 py-1 rounded"
+          onClick={sendMessage}
+          disabled={loading}
+        >
+          Send
+        </button>
+      </div>
+    </div>
+  );
+}
+
+3. About Clone Voice
+We haven't added the clone. Voice. In our original parameter. Is that an issue?
+
+No problem!
+Voice cloning is a separate feature and not required for the main audio pipeline.
+You can add it later as a new backend endpoint (e.g. /api/BRIDGIT_AI_/clone-voice) and a new frontend component/page for managing voices.
+The main pipeline (record, STT, translate, TTS, playback) works fine without it.
+
+4. Next Steps
+Add these components to your React app.
+For voice management (create/clone/list), add new backend endpoints and corresponding frontend pages as needed.
+For user management (login, profile, avatar, etc.), use React Context and standard auth flows.
+If you want a voice management example or user auth/profile example, just ask!
+Let me know if you want to see the backend for voice cloning, or more frontend code for user/voice management.
+
+
+Exa AI
+DuckDuckGo
+GitHub
+Mem0
+Neon
+Tavily
+Hyperbrowser
+Todoist
+Exa AI
+DuckDuckGo
+GitHub
+Add servers

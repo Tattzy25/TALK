@@ -1,0 +1,514 @@
+Absolutely! Here’s a single-file Express backend (TypeScript, but you can easily adapt to JS) that:
+
+Accepts an audio file upload
+Detects voice features (stub, you can expand)
+Transcribes with ElevenLabs STT
+Translates with DeepL
+Synthesizes speech with ElevenLabs TTS (with all your parameters)
+Returns a JSON with the TTS audio URL, transcript, translation, detected language, STT word timings, and features
+Instructions are at the end.
+
+1. Single-File Backend: bridgit_ai_server.ts
+import express from 'express';
+import multer from 'multer';
+import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
+import axios from 'axios';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const app = express();
+const upload = multer({ dest: 'uploads/' });
+
+app.use(cors());
+app.use('/audio', express.static(path.join(__dirname, 'audio'))); // Serve audio files
+
+// Helper: Analyze audio (stub, expand as needed)
+async function analyzeAudio(audioPath: string) {
+  // Integrate OpenSMILE, AssemblyAI, etc. for real analysis
+  return {
+    tone: 'neutral',
+    pitch: 120,
+    mood: 'happy',
+    sentiment: 'positive',
+    language: 'en',
+  };
+}
+
+// Helper: ElevenLabs STT
+async function elevenLabsSTT(audioPath: string) {
+  const apiKey = process.env.ELEVENLABS_API_KEY!;
+  const formData = new (require('form-data'))();
+  formData.append('file', fs.createReadStream(audioPath));
+  formData.append('model_id', 'scribe_v1_experimental');
+  formData.append('num_speakers', '1');
+  formData.append('file_format', 'other');
+  formData.append('tag_audio_events', 'true');
+  formData.append('timestamps_granularity', 'word');
+  formData.append('cloud_storage_url', '');
+  formData.append('language_code', 'en');
+
+  const response = await axios.post(
+    'https://api.elevenlabs.io/v1/speech-to-text?enable_logging=true',
+    formData,
+    {
+      headers: {
+        ...formData.getHeaders(),
+        'xi-api-key': apiKey,
+      },
+      maxBodyLength: Infinity,
+    }
+  );
+  return response.data;
+}
+
+// Helper: DeepL Translate
+async function deepLTranslate(text: string, targetLang: string, sourceLang: string) {
+  const apiKey = process.env.DEEPL_API_KEY!;
+  const payload = {
+    split_sentences: "1",
+    preserve_formatting: false,
+    formality: "prefer_less",
+    outline_detection: true,
+    text: [text],
+    target_lang: targetLang,
+    source_lang: sourceLang,
+    model_type: "prefer_quality_optimized"
+  };
+
+  const response = await axios.post(
+    'https://api.deepl.com/v2/translate',
+    payload,
+    {
+      headers: {
+        'Authorization': `DeepL-Auth-Key ${apiKey}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+  return response.data.translations[0];
+}
+
+// Helper: ElevenLabs TTS
+async function elevenLabsTTS(
+  text: string,
+  voiceId: string,
+  modelId: string = "eleven_flash_v2_5",
+  languageCode: string = "en",
+  voiceSettings = {
+    stability: 0,
+    use_speaker_boost: false,
+    style: 0,
+    similarity_boost: 0,
+    speed: 1
+  }
+): Promise<string> {
+  const apiKey = process.env.ELEVENLABS_API_KEY!;
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_128`;
+
+  const response = await axios.post(
+    url,
+    {
+      text,
+      model_id: modelId,
+      language_code: languageCode,
+      voice_settings: voiceSettings
+    },
+    {
+      headers: {
+        "xi-api-key": apiKey,
+        "Content-Type": "application/json"
+      },
+      responseType: "arraybuffer"
+    }
+  );
+
+  const audioDir = path.join(__dirname, 'audio');
+  if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir);
+  const audioPath = path.join(audioDir, `tts_${Date.now()}.mp3`);
+  fs.writeFileSync(audioPath, response.data);
+  return audioPath;
+}
+
+// Main BRIDGIT_AI_ endpoint
+app.post('/api/BRIDGIT_AI_/process-audio', upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No audio file uploaded.' });
+    const audioPath = req.file.path;
+
+    // 1. Analyze audio features
+    const features = await analyzeAudio(audioPath);
+
+    // 2. Speech-to-Text (STT)
+    const sttResult = await elevenLabsSTT(audioPath);
+    const transcript = sttResult.text;
+    const detectedLang = sttResult.language_code || 'EN';
+
+    // 3. Translation (DeepL)
+    const targetLang = req.body.targetLang || 'ES'; // Default to Spanish
+    const translation = await deepLTranslate(transcript, targetLang, detectedLang);
+
+    // 4. Text-to-Speech (TTS) with all parameters
+    const voiceId = req.body.voiceId || 'JBFqnCBsd6RMkjVDRZzb'; // Your default voice ID
+    const modelId = req.body.modelId || 'eleven_flash_v2_5';
+    const languageCode = req.body.ttsLanguageCode || 'en';
+    const voiceSettings = req.body.voiceSettings
+      ? JSON.parse(req.body.voiceSettings)
+      : {
+          stability: 0,
+          use_speaker_boost: false,
+          style: 0,
+          similarity_boost: 0,
+          speed: 1
+        };
+
+    const ttsAudioPath = await elevenLabsTTS(
+      translation.text,
+      voiceId,
+      modelId,
+      languageCode,
+      voiceSettings
+    );
+
+    // 5. Return result
+    res.json({
+      audioUrl: `/audio/${path.basename(ttsAudioPath)}`,
+      transcript,
+      translatedText: translation.text,
+      detectedSourceLanguage: translation.detected_source_language,
+      modelTypeUsed: translation.model_type_used,
+      sttWords: sttResult.words,
+      features,
+    });
+
+    fs.unlink(audioPath, () => {});
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Start server
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+  console.log(`BRIDGIT_AI_ backend running on port ${PORT}`);
+});
+
+2. Instructions
+Prerequisites
+Node.js 18+
+Your ElevenLabs and DeepL API keys
+Setup
+Save the code above as bridgit_ai_server.ts (or .js if you prefer JS, just remove types).
+Install dependencies:
+npm install express multer axios cors dotenv form-data
+npm install --save-dev @types/express @types/multer @types/cors @types/form-data
+
+Create a .env file in the same directory:
+ELEVENLABS_API_KEY=your_elevenlabs_key
+DEEPL_API_KEY=your_deepl_key
+
+Create an audio directory in the same folder (or let the code create it).
+Compile (if using TypeScript):
+npx tsc bridgit_ai_server.ts
+
+Or run directly with ts-node:
+npx ts-node bridgit_ai_server.ts
+
+Or run as JS:
+node bridgit_ai_server.js
+
+Start the server:
+node bridgit_ai_server.js
+
+or
+npx ts-node bridgit_ai_server.ts
+
+Usage
+POST to /api/BRIDGIT_AI_/process-audio with multipart/form-data:
+audio (file, required)
+targetLang (optional, e.g. "ES")
+voiceId (optional, e.g. "JBFqnCBsd6RMkjVDRZzb")
+modelId (optional, e.g. "eleven_flash_v2_5")
+ttsLanguageCode (optional, e.g. "en")
+voiceSettings (optional, JSON stringified object)
+Example cURL:
+
+curl -X POST http://localhost:3001/api/BRIDGIT_AI_/process-audio \
+  -F "audio=@/path/to/your/audio.wav" \
+  -F "targetLang=ES" \
+  -F "voiceId=JBFqnCBsd6RMkjVDRZzb" \
+  -F "modelId=eleven_flash_v2_5" \
+  -F "ttsLanguageCode=en" \
+  -F "voiceSettings={\"stability\":0,\"use_speaker_boost\":false,\"style\":0,\"similarity_boost\":0,\"speed\":1}"
+
+Response:
+
+{
+  "audioUrl": "/audio/tts_1689999999999.mp3",
+  "transcript": "...",
+  "translatedText": "...",
+  "detectedSourceLanguage": "...",
+  "modelTypeUsed": "...",
+  "sttWords": [ ... ],
+  "features": { ... }
+}
+
+The audio file is available at http://localhost:3001/audio/tts_1689999999999.mp3 for playback.
+3. Playback
+On the frontend, use the returned audioUrl in an <audio> tag:
+
+<audio src="http://localhost:3001/audio/tts_1689999999999.mp3" controls autoPlay />
+
+4. Next Steps
+Integrate real audio analysis in analyzeAudio.
+Add endpoints for voice cloning, etc., as needed.
+Move to frontend integration when ready!
+Let me know if you need a JavaScript version, or want to proceed to the frontend pipeline!
+
+User
+yes please javascript version would be amazing
+
+Assistant
+Absolutely! Here is the JavaScript version of the all-in-one Express backend file for your BRIDGIT_AI_ API.
+This version uses CommonJS modules and works with Node.js 18+.
+
+1. Save as bridgit_ai_server.js
+const express = require('express');
+const multer = require('multer');
+const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
+const axios = require('axios');
+const dotenv = require('dotenv');
+const FormData = require('form-data');
+
+dotenv.config();
+
+const app = express();
+const upload = multer({ dest: 'uploads/' });
+
+app.use(cors());
+app.use('/audio', express.static(path.join(__dirname, 'audio'))); // Serve audio files
+
+// Helper: Analyze audio (stub, expand as needed)
+async function analyzeAudio(audioPath) {
+  // Integrate OpenSMILE, AssemblyAI, etc. for real analysis
+  return {
+    tone: 'neutral',
+    pitch: 120,
+    mood: 'happy',
+    sentiment: 'positive',
+    language: 'en',
+  };
+}
+
+// Helper: ElevenLabs STT
+async function elevenLabsSTT(audioPath) {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  const formData = new FormData();
+  formData.append('file', fs.createReadStream(audioPath));
+  formData.append('model_id', 'scribe_v1_experimental');
+  formData.append('num_speakers', '1');
+  formData.append('file_format', 'other');
+  formData.append('tag_audio_events', 'true');
+  formData.append('timestamps_granularity', 'word');
+  formData.append('cloud_storage_url', '');
+  formData.append('language_code', 'en');
+
+  const response = await axios.post(
+    'https://api.elevenlabs.io/v1/speech-to-text?enable_logging=true',
+    formData,
+    {
+      headers: {
+        ...formData.getHeaders(),
+        'xi-api-key': apiKey,
+      },
+      maxBodyLength: Infinity,
+    }
+  );
+  return response.data;
+}
+
+// Helper: DeepL Translate
+async function deepLTranslate(text, targetLang, sourceLang) {
+  const apiKey = process.env.DEEPL_API_KEY;
+  const payload = {
+    split_sentences: "1",
+    preserve_formatting: false,
+    formality: "prefer_less",
+    outline_detection: true,
+    text: [text],
+    target_lang: targetLang,
+    source_lang: sourceLang,
+    model_type: "prefer_quality_optimized"
+  };
+
+  const response = await axios.post(
+    'https://api.deepl.com/v2/translate',
+    payload,
+    {
+      headers: {
+        'Authorization': `DeepL-Auth-Key ${apiKey}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+  return response.data.translations[0];
+}
+
+// Helper: ElevenLabs TTS
+async function elevenLabsTTS(
+  text,
+  voiceId,
+  modelId = "eleven_flash_v2_5",
+  languageCode = "en",
+  voiceSettings = {
+    stability: 0,
+    use_speaker_boost: false,
+    style: 0,
+    similarity_boost: 0,
+    speed: 1
+  }
+) {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_128`;
+
+  const response = await axios.post(
+    url,
+    {
+      text,
+      model_id: modelId,
+      language_code: languageCode,
+      voice_settings: voiceSettings
+    },
+    {
+      headers: {
+        "xi-api-key": apiKey,
+        "Content-Type": "application/json"
+      },
+      responseType: "arraybuffer"
+    }
+  );
+
+  const audioDir = path.join(__dirname, 'audio');
+  if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir);
+  const audioPath = path.join(audioDir, `tts_${Date.now()}.mp3`);
+  fs.writeFileSync(audioPath, response.data);
+  return audioPath;
+}
+
+// Main BRIDGIT_AI_ endpoint
+app.post('/api/BRIDGIT_AI_/process-audio', upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No audio file uploaded.' });
+    const audioPath = req.file.path;
+
+    // 1. Analyze audio features
+    const features = await analyzeAudio(audioPath);
+
+    // 2. Speech-to-Text (STT)
+    const sttResult = await elevenLabsSTT(audioPath);
+    const transcript = sttResult.text;
+    const detectedLang = sttResult.language_code || 'EN';
+
+    // 3. Translation (DeepL)
+    const targetLang = req.body.targetLang || 'ES'; // Default to Spanish
+    const translation = await deepLTranslate(transcript, targetLang, detectedLang);
+
+    // 4. Text-to-Speech (TTS) with all parameters
+    const voiceId = req.body.voiceId || 'JBFqnCBsd6RMkjVDRZzb'; // Your default voice ID
+    const modelId = req.body.modelId || 'eleven_flash_v2_5';
+    const languageCode = req.body.ttsLanguageCode || 'en';
+    const voiceSettings = req.body.voiceSettings
+      ? JSON.parse(req.body.voiceSettings)
+      : {
+          stability: 0,
+          use_speaker_boost: false,
+          style: 0,
+          similarity_boost: 0,
+          speed: 1
+        };
+
+    const ttsAudioPath = await elevenLabsTTS(
+      translation.text,
+      voiceId,
+      modelId,
+      languageCode,
+      voiceSettings
+    );
+
+    // 5. Return result
+    res.json({
+      audioUrl: `/audio/${path.basename(ttsAudioPath)}`,
+      transcript,
+      translatedText: translation.text,
+      detectedSourceLanguage: translation.detected_source_language,
+      modelTypeUsed: translation.model_type_used,
+      sttWords: sttResult.words,
+      features,
+    });
+
+    fs.unlink(audioPath, () => {});
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Start server
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+  console.log(`BRIDGIT_AI_ backend running on port ${PORT}`);
+});
+
+2. Instructions
+Prerequisites
+Node.js 18+
+Your ElevenLabs and DeepL API keys
+Setup
+Save the code above as bridgit_ai_server.js
+Install dependencies:
+npm install express multer axios cors dotenv form-data
+
+Create a .env file in the same directory:
+ELEVENLABS_API_KEY=your_elevenlabs_key
+DEEPL_API_KEY=your_deepl_key
+
+Create an audio directory in the same folder (or let the code create it).
+Start the server:
+node bridgit_ai_server.js
+
+Usage
+POST to /api/BRIDGIT_AI_/process-audio with multipart/form-data:
+audio (file, required)
+targetLang (optional, e.g. "ES")
+voiceId (optional, e.g. "JBFqnCBsd6RMkjVDRZzb")
+modelId (optional, e.g. "eleven_flash_v2_5")
+ttsLanguageCode (optional, e.g. "en")
+voiceSettings (optional, JSON stringified object)
+Example cURL:
+
+curl -X POST http://localhost:3001/api/BRIDGIT_AI_/process-audio \
+  -F "audio=@/path/to/your/audio.wav" \
+  -F "targetLang=ES" \
+  -F "voiceId=JBFqnCBsd6RMkjVDRZzb" \
+  -F "modelId=eleven_flash_v2_5" \
+  -F "ttsLanguageCode=en" \
+  -F "voiceSettings={\"stability\":0,\"use_speaker_boost\":false,\"style\":0,\"similarity_boost\":0,\"speed\":1}"
+
+Response:
+
+{
+  "audioUrl": "/audio/tts_1689999999999.mp3",
+  "transcript": "...",
+  "translatedText": "...",
+  "detectedSourceLanguage": "...",
+  "modelTypeUsed": "...",
+  "sttWords": [ ... ],
+  "features": { ... }
+}
+
+The audio file is available at http://localhost:3001/audio/tts_1689999999999.mp3 for playback.
