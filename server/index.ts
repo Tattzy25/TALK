@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { handleDemo } from "./routes/demo";
+import path from "path";
 import { handleProcessAudio } from "./routes/bridgit";
 
 export function createServer() {
@@ -19,7 +19,8 @@ export function createServer() {
     res.json({ message: "Hello from Express server v2!" });
   });
 
-  app.get("/api/demo", handleDemo);
+  // Remove demo route
+  // app.get("/api/demo", handleDemo);
 
   // BRIDGIT_AI_ endpoint
   app.post("/api/BRIDGIT_AI_/process-audio", handleProcessAudio);

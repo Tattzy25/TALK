@@ -20,32 +20,62 @@ export function VoicePlayer({
 }: VoicePlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
-    // Simulate audio playback for demo
-    if (isPlaying) {
-      const interval = setInterval(() => {
-        setProgress(prev => {
-          if (prev >= 100) {
-            setIsPlaying(false);
-            return 0;
-          }
-          return prev + 2;
-        });
-      }, 100);
-      return () => clearInterval(interval);
+    if (audioUrl) {
+      audioRef.current = new Audio(audioUrl);
+      const audio = audioRef.current;
+
+      const updateProgress = () => {
+        setCurrentTime(audio.currentTime);
+        setProgress((audio.currentTime / audio.duration) * 100);
+      };
+
+      const setAudioDuration = () => {
+        setDuration(audio.duration);
+      };
+
+      const handleEnded = () => {
+        setIsPlaying(false);
+        setProgress(0);
+        setCurrentTime(0);
+      };
+
+      audio.addEventListener('timeupdate', updateProgress);
+      audio.addEventListener('loadedmetadata', setAudioDuration);
+      audio.addEventListener('ended', handleEnded);
+
+      return () => {
+        audio.pause();
+        audio.removeEventListener('timeupdate', updateProgress);
+        audio.removeEventListener('loadedmetadata', setAudioDuration);
+        audio.removeEventListener('ended', handleEnded);
+      };
     }
-  }, [isPlaying]);
+  }, [audioUrl]);
 
   const handlePlay = () => {
-    setIsPlaying(!isPlaying);
+    if (audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.pause();
+      } else {
+        audioRef.current.play();
+      }
+      setIsPlaying(!isPlaying);
+    }
   };
 
   const handleStop = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
     setIsPlaying(false);
     setProgress(0);
+    setCurrentTime(0);
   };
 
   if (variant === 'mini') {
@@ -127,7 +157,7 @@ export function VoicePlayer({
         </div>
         
         <div className="text-xs text-muted-foreground">
-          {isPlaying ? `${Math.floor(progress * 0.05)}s` : '0:05'}
+          {Math.floor(currentTime)}s / {Math.floor(duration)}s
         </div>
       </div>
 

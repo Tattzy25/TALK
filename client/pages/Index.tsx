@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ElectricWave } from '../components/ui/electric-wave';
 import { LanguageCarousel } from '../components/ui/language-carousel';
 import { VoicePlayer } from '../components/ui/voice-player';
@@ -47,33 +47,55 @@ export default function Index() {
   const [selectedScenario, setSelectedScenario] = useState('casual');
   const [selectedTone, setSelectedTone] = useState('casual');
   const [coachMood, setCoachMood] = useState('calm');
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
 
-  const handleStartRecording = () => {
-    setIsListening(true);
-    setRecordedText('');
-    setTranslatedText('');
-    
-    // Simulate recording for demo
-    setTimeout(() => {
-      setIsListening(false);
-      setRecordedText('Hello, how are you today?');
-      
-      // Start translation
-      setIsTranslating(true);
-      setTimeout(() => {
-        setIsTranslating(false);
-        setTranslatedText('Hola, ¿cómo estás hoy?');
-        
-        // Auto-play translation
-        setIsPlaying(true);
-        setTimeout(() => {
-          setIsPlaying(false);
-        }, 3000);
-      }, 2000);
-    }, 3000);
+  const handleStartRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        audioChunksRef.current.push(event.data);
+      };
+      mediaRecorderRef.current.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        const formData = new FormData();
+        formData.append('audio', audioBlob, 'recording.wav');
+        formData.append('fromLanguage', fromLanguage);
+        formData.append('toLanguage', toLanguage);
+        setIsTranslating(true);
+        try {
+          const response = await fetch('/api/BRIDGIT_AI_/process-audio', {
+            method: 'POST',
+            body: formData,
+          });
+          if (!response.ok) throw new Error('Failed to process audio');
+          const data = await response.json();
+          setRecordedText(data.transcribedText || '');
+          setTranslatedText(data.translatedText || '');
+          if (data.audioUrl) {
+            setIsPlaying(true);
+          }
+        } catch (error) {
+          console.error('Error processing audio:', error);
+        } finally {
+          setIsTranslating(false);
+        }
+      };
+      mediaRecorderRef.current.start();
+      setIsListening(true);
+      setRecordedText('');
+      setTranslatedText('');
+    } catch (error) {
+      console.error('Error starting recording:', error);
+    }
   };
 
   const handleStopRecording = () => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+    }
     setIsListening(false);
   };
 
